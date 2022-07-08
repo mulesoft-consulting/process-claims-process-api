@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:java="http://www.mulesoft.org/schema/mule/java" xmlns:claims-system-api="http://www.mulesoft.org/schema/mule/claims-system-api"
+	xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+http://www.mulesoft.org/schema/mule/claims-system-api http://www.mulesoft.org/schema/mule/claims-system-api/current/mule-claims-system-api.xsd
+http://www.mulesoft.org/schema/mule/java http://www.mulesoft.org/schema/mule/java/current/mule-java.xsd">
+	<configuration-properties doc:name="Configuration properties" doc:id="2e40933d-319c-4583-8cc0-1e5f1550c2dc" file="mule-artifact.properties" />
+	<sftp:config name="SFTP_Config" doc:name="SFTP Config" doc:id="8434d83b-020d-4266-9450-3f5daba05fee" >
+		<sftp:connection host="${sftp.host}" port="${sftp.port}" username="${sftp.username}" password="${sftp.password}" workingDir="${sftp.workingDirectory}"/>
+	</sftp:config>
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="1a0c63ab-61eb-4eaf-b8f4-01221e9e0281" >
+		<db:oracle-connection host="${oracle.db.host}" port="${oracle.db.port}" user="${oracle.db.user}" password="${oracle.db.password}" instance="${oracle.db.instance}" />
+	</db:config>
+	<kafka:producer-config name="Apache_Kafka_Producer_configuration" doc:name="Apache Kafka Producer configuration" doc:id="21ccaf6a-98e7-42e4-a456-6d6ba85be2f7" >
+		<kafka:producer-plaintext-connection >
+			<kafka:bootstrap-servers >
+				<kafka:bootstrap-server value="${kafka.topic.server.url}" />
+			</kafka:bootstrap-servers>
+		</kafka:producer-plaintext-connection>
+	</kafka:producer-config>
+	<kafka:consumer-config name="Apache_Kafka_Consumer_configuration_upate_provider_details" doc:name="Apache Kafka Consumer configuration" doc:id="f3f46c63-d36d-4d44-82ca-c8ed09c64781" >
+		<kafka:consumer-plaintext-connection groupId="${consumer.group.update.provider.details}" consumerAmount="10" autoOffsetReset="EARLIEST">
+			<kafka:bootstrap-servers >
+				<kafka:bootstrap-server value="${kafka.topic.server.url}" />
+			</kafka:bootstrap-servers>
+			<kafka:topic-patterns >
+				<kafka:topic-pattern value="${kafka.topic.name}" />
+			</kafka:topic-patterns>
+		</kafka:consumer-plaintext-connection>
+	</kafka:consumer-config>
+	<kafka:consumer-config name="Apache_Kafka_Consumer_configuration_validate_claims" doc:name="Apache Kafka Consumer configuration" doc:id="0960b42e-9be7-4c59-81d2-a0461421ecd6" >
+		<kafka:consumer-plaintext-connection groupId="${consumer.group.validate.claims}" autoOffsetReset="EARLIEST" consumerAmount="10">
+			<kafka:bootstrap-servers >
+				<kafka:bootstrap-server value="${kafka.topic.server.url}" />
+			</kafka:bootstrap-servers>
+			<kafka:topic-patterns >
+				<kafka:topic-pattern value="${kafka.topic.name}" />
+			</kafka:topic-patterns>
+		</kafka:consumer-plaintext-connection>
+	</kafka:consumer-config>
+	<claims-system-api:config name="Claims_System_API_Config" doc:name="Claims System API Config" doc:id="8560427c-e239-4a12-9665-ea1f743354d2" property_host="${claims.system.api.host}" property_port="${claims.system.api.port}" property_protocol="HTTP" property_basePath="${claims.system.api.basePath}" />
+	<flow name="Process-Claims-API-Flow" doc:id="1ad8576d-7969-4b88-9583-c50dca6e96fd" >
+		<sftp:listener doc:name="On New or Updated File" doc:id="12cc0154-4b19-4cc1-b30b-6400ecda2e45" config-ref="SFTP_Config" autoDelete="true" moveToDirectory="#[p('sftp.workingDirectory') ++ &quot;/Archive&quot;]" renameTo='#[uuid() ++ ".csv"]' applyPostActionWhenFailed="false" directory="InboundClaims">
+			<scheduling-strategy >
+				<fixed-frequency />
+			</scheduling-strategy>
+			<sftp:matcher filenamePattern="*.csv" symLinks="EXCLUDE"/>
+		</sftp:listener>
+		<logger level="INFO" doc:name="Logger" doc:id="43642c01-a1d9-47cd-8e67-79df429ff010" message="#[output application/json --- attributes]"/>
+		<ee:transform doc:name="Transform Message" doc:id="f775ca21-5f9e-4497-98ab-c34ad69f6bec" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+fun returnClaimType() = if (attributes.path contains ("Inpatient")) "INPATIENT" else "OUTPATIENT"
+---
+payload map (item, index) -> {
+	"DESYNPUF_ID": item.DESYNPUF_ID,
+	"CLM_ID": item.CLM_ID,
+	"SEGMENT": item.SEGMENT,
+	"CLM_FROM_DT": item.CLM_FROM_DT,
+	"CLM_THRU_DT": item.CLM_THRU_DT,
+	"PRVDR_NUM": item.PRVDR_NUM,
+	"CLM_PMT_AMT": item.CLM_PMT_AMT as Number default 0,
+	"NCH_PRMRY_PYR_CLM_PD_AMT": item.NCH_PRMRY_PYR_CLM_PD_AMT as Number default 0 ,
+	"AT_PHYSN_NPI": item.AT_PHYSN_NPI,
+	"OP_PHYSN_NPI": item.OP_PHYSN_NPI,
+	"OT_PHYSN_NPI": item.OT_PHYSN_NPI,
+	"CLM_ADMSN_DT": item.CLM_ADMSN_DT as String default "",
+	"ADMTNG_ICD9_DGNS_CD": item.ADMTNG_ICD9_DGNS_CD,
+	"CLM_PASS_THRU_PER_DIEM_AMT": item.CLM_PASS_THRU_PER_DIEM_AMT as Number default 0,
+	"NCH_BENE_IP_DDCTBL_AMT": item.NCH_BENE_IP_DDCTBL_AMT as Number default 0,
+	"NCH_BENE_PTA_COINSRNC_LBLTY_AM": item.NCH_BENE_PTA_COINSRNC_LBLTY_AM as Number default 0,
+	"NCH_BENE_BLOOD_DDCTBL_LBLTY_AM": item.NCH_BENE_BLOOD_DDCTBL_LBLTY_AM as Number default 0,
+	"CLM_UTLZTN_DAY_CNT": item.CLM_UTLZTN_DAY_CNT as Number default 0,
+	"NCH_BENE_DSCHRG_DT": item.NCH_BENE_DSCHRG_DT as String default "",
+	"CLM_DRG_CD": item.CLM_DRG_CD as String default "",
+	"ICD9_DGNS_CD_1": item.ICD9_DGNS_CD_1,
+	"ICD9_DGNS_CD_2": item.ICD9_DGNS_CD_2,
+	"ICD9_DGNS_CD_3": item.ICD9_DGNS_CD_3,
+	"ICD9_DGNS_CD_4": item.ICD9_DGNS_CD_4,
+	"ICD9_DGNS_CD_5": item.ICD9_DGNS_CD_5,
+	"ICD9_DGNS_CD_6": item.ICD9_DGNS_CD_6,
+	"ICD9_DGNS_CD_7": item.ICD9_DGNS_CD_7,
+	"ICD9_DGNS_CD_8": item.ICD9_DGNS_CD_8,
+	"ICD9_DGNS_CD_9": item.ICD9_DGNS_CD_9,
+	"ICD9_DGNS_CD_10": item.ICD9_DGNS_CD_10,
+	"ICD9_PRCDR_CD_1": item.ICD9_PRCDR_CD_1,
+	"ICD9_PRCDR_CD_2": item.ICD9_PRCDR_CD_2,
+	"ICD9_PRCDR_CD_3": item.ICD9_PRCDR_CD_3,
+	"ICD9_PRCDR_CD_4": item.ICD9_PRCDR_CD_4,
+	"ICD9_PRCDR_CD_5": item.ICD9_PRCDR_CD_5,
+	"ICD9_PRCDR_CD_6": item.ICD9_PRCDR_CD_6,
+	"NCH_BENE_PTB_DDCTBL_AMT": item.NCH_BENE_PTB_DDCTBL_AMT as Number default 0,
+	"NCH_BENE_PTB_COINSRNC_AMT": item.NCH_BENE_PTB_COINSRNC_AMT as Number default 0,
+	"HCPCS_CD_1": item.HCPCS_CD_1,
+	"HCPCS_CD_2": item.HCPCS_CD_2,
+	"HCPCS_CD_3": item.HCPCS_CD_3,
+	"HCPCS_CD_4": item.HCPCS_CD_4,
+	"HCPCS_CD_5": item.HCPCS_CD_5,
+	"HCPCS_CD_6": item.HCPCS_CD_6,
+	"HCPCS_CD_7": item.HCPCS_CD_7,
+	"HCPCS_CD_8": item.HCPCS_CD_8,
+	"HCPCS_CD_9": item.HCPCS_CD_9,
+	"HCPCS_CD_10": item.HCPCS_CD_10,
+	"HCPCS_CD_11": item.HCPCS_CD_11,
+	"HCPCS_CD_12": item.HCPCS_CD_12,
+	"HCPCS_CD_13": item.HCPCS_CD_13,
+	"HCPCS_CD_14": item.HCPCS_CD_14,
+	"HCPCS_CD_15": item.HCPCS_CD_15,
+	"HCPCS_CD_16": item.HCPCS_CD_16,
+	"HCPCS_CD_17": item.HCPCS_CD_17,
+	"HCPCS_CD_18": item.HCPCS_CD_18,
+	"HCPCS_CD_19": item.HCPCS_CD_19,
+	"HCPCS_CD_20": item.HCPCS_CD_20,
+	"HCPCS_CD_21": item.HCPCS_CD_21,
+	"HCPCS_CD_22": item.HCPCS_CD_22,
+	"HCPCS_CD_23": item.HCPCS_CD_23,
+	"HCPCS_CD_24": item.HCPCS_CD_24,
+	"HCPCS_CD_25": item.HCPCS_CD_25,
+	"HCPCS_CD_26": item.HCPCS_CD_26,
+	"HCPCS_CD_27": item.HCPCS_CD_27,
+	"HCPCS_CD_28": item.HCPCS_CD_28,
+	"HCPCS_CD_29": item.HCPCS_CD_29,
+	"HCPCS_CD_30": item.HCPCS_CD_30,
+	"HCPCS_CD_31": item.HCPCS_CD_31,
+	"HCPCS_CD_32": item.HCPCS_CD_32,
+	"HCPCS_CD_33": item.HCPCS_CD_33,
+	"HCPCS_CD_34": item.HCPCS_CD_34,
+	"HCPCS_CD_35": item.HCPCS_CD_35,
+	"HCPCS_CD_36": item.HCPCS_CD_36,
+	"HCPCS_CD_37": item.HCPCS_CD_37,
+	"HCPCS_CD_38": item.HCPCS_CD_38,
+	"HCPCS_CD_39": item.HCPCS_CD_39,
+	"HCPCS_CD_40": item.HCPCS_CD_40,
+	"HCPCS_CD_41": item.HCPCS_CD_41,
+	"HCPCS_CD_42": item.HCPCS_CD_42,
+	"HCPCS_CD_43": item.HCPCS_CD_43,
+	"HCPCS_CD_44": item.HCPCS_CD_44,
+	"HCPCS_CD_45": item.HCPCS_CD_45,
+	"CLM_TYPE": returnClaimType(),
+	"CLM_STATUS": "NEW"
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<claims-system-api:add-new-claims doc:name="Persist claims received from Inpatient and Outpatient claim files" doc:id="67051380-4fa7-40fe-ad19-b893efc53a0a" config-ref="Claims_System_API_Config"/>
+		<logger level="INFO" doc:name="Logger" doc:id="b004bbe3-daec-4976-85ca-0ccebf97057b" message="#[payload]"/>
+	</flow>
+	<flow name="Publish-Claims-API-Flow" doc:id="dbc97dda-700d-4222-bc4f-b922f3f95298" initialState="started">
+		<db:listener doc:name="On Claims Table Row" doc:id="28f93d4b-6403-401e-b8af-96848daebac2" config-ref="Database_Config" table="CMS_CLAIMS" watermarkColumn="ID" idColumn="ID">
+			<scheduling-strategy >
+				<fixed-frequency />
+			</scheduling-strategy>
+		</db:listener>
+		<logger level="INFO" doc:name="Logger" doc:id="be85680e-2b8d-415d-9524-8030d41bfa27" message="#[output application/json --- payload]"/>
+		<ee:transform doc:name="Transform Message" doc:id="0307da70-a339-44f1-a1ea-773089210ded" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"ID": payload.ID,
+	"DESYNPUF_ID": payload.DESYNPUF_ID,
+	"CLM_ID": payload.CLM_ID,
+	"AT_PHYSN_NPI": payload.AT_PHYSN_NPI,
+	"CLM_FROM_DT": payload.CLM_FROM_DT,
+	"CLM_THRU_DT": payload.CLM_THRU_DT
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<kafka:publish doc:name="Publish claim data for validationa and provider demographics update" doc:id="f1ceb030-a0b8-4b9d-8a3b-80e1a3d5e2f6" config-ref="Apache_Kafka_Producer_configuration" topic="${kafka.topic.name}" key="#[payload.ID]"/>
+	</flow>
+	<flow name="Retrieve-and-Update-Provider-Details-API-Flow" doc:id="5e37e096-3d5f-493b-b5dd-b350155195b6" initialState="started">
+		<kafka:message-listener doc:name="Update Provider Details" doc:id="42363697-6bfe-4280-a09c-4c40c7451730" config-ref="Apache_Kafka_Consumer_configuration_upate_provider_details" parallelConsumersAmount="5"/>
+		<logger level="INFO" doc:name="Logger" doc:id="d4319e17-9852-442e-9946-be8b6aea485c" message="#[payload]"/>
+		<set-variable value='#[output applcation/json --- read(payload, "application/json")]' doc:name="Claim data retrieved from Kafka Topic" doc:id="30ef1ad2-bc4a-4269-a432-c191cef8a92f" variableName="claimData"/>
+		<http:request method="GET" doc:name="Invoke NPPES API to retrieve Provider Details" doc:id="940a771b-0421-43d3-9905-24281a019735" url="https://npiregistry.cms.hhs.gov/api/" target="nppesResponse" targetValue="#[output application/json --- payload]">
+			<http:query-params ><![CDATA[#[output application/java
+---
+{
+	"version" : "2.0",
+	"pretty" : "true",
+	"number" : vars.claimData.AT_PHYSN_NPI
+}]]]></http:query-params>
+		</http:request>
+		<logger level="INFO" doc:name="Logger" doc:id="267d4849-38ec-4b41-80b8-58e884dffe79" message="#[vars.nppesResponse]"/>
+		<ee:transform doc:name="Transform Message" doc:id="13e84e99-d6e3-4050-b76b-5ae3ac08a5fa" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "DESYNPUF_ID": vars.claimData.DESYNPUF_ID,
+    "CLM_ID": vars.claimData.CLM_ID,
+    "PROVIDER_NPI": vars.nppesResponse.results[0].number as String default"",
+    "CREDENTIAL": vars.nppesResponse.results[0].basic.credential as String default"",
+    "FIRST_NAME": vars.nppesResponse.results[0].basic.first_name as String default"",
+    "MIDDLE_NAME": vars.nppesResponse.results[0].basic.middle_name as String default"",
+    "LAST_NAME": vars.nppesResponse.results[0].basic.last_name as String default"",
+    "NAME": vars.nppesResponse.results[0].basic.name as String default"",
+    "NAME_PREFIX": vars.nppesResponse.results[0].basic.name_prefix as String default"",
+    "SOLE_PROPRIETOR": vars.nppesResponse.results[0].basic.sole_proprietor as String default"",
+    "STATUS": vars.nppesResponse.results[0].basic.status as String default"",
+    "ENUMERATION_TYPE": vars.nppesResponse.results[0].enumeration_type as String default""	
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<claims-system-api:create-provider doc:name="Insert Provider Details returned from NPPES API" doc:id="2e9796b5-6373-49b3-ae76-fa06adf76abb" config-ref="Claims_System_API_Config" target="generatedProviderId"/>
+		<ee:transform doc:name="Transform Message" doc:id="d7f0fc90-7d3c-495f-9fa0-eb74f7b6944d" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+vars.nppesResponse.results[0].addresses map (item, index) -> {	 
+	"CMS_CLAIM_PROVIDER_DETAILS_ID": vars.generatedProviderId,
+	"ADDRESS_1": item.address_1 as String default"",
+	"ADDRESS_2": item.address_2 as String default"",
+	"ADDRESS_PURPOSE": item.address_purpose as String default"",
+	"ADDRESS_TYPE": item.address_type as String default"",
+	"CITY": item.city as String default"",
+	"COUNTRY_CODE": item.country_code as String default"",
+	"COUNTRY_NAME": item.country_name as String default"",
+	"FAX_NUMBER": item.fax_number as String default"",
+	"POSTAL_CODE": item.postal_code as String default"",
+	"STATE": item.state as String default"",
+	"TELEPHONE_NUMBER": item.telephone_number as String default""
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<claims-system-api:create-provider-addres doc:name="Propogate Provider Address Details" doc:id="02667529-66e4-4f82-bd1a-74ada14f20f2" config-ref="Claims_System_API_Config"/>
+		<logger level="INFO" doc:name="Logger" doc:id="35335f82-f68a-4f1a-88b8-d02a78ef9b44" message="#[payload]"/>
+	</flow>
+	<flow name="Validate-Claims-API-Flow" doc:id="8156302c-05f4-46ce-aa0f-193d8308ffe3" initialState="started">
+		<kafka:message-listener doc:name="Validate Claims" doc:id="253c491d-c44d-486b-85d9-1646d23922bb" config-ref="Apache_Kafka_Consumer_configuration_validate_claims" parallelConsumersAmount="5"/>
+		<logger level="INFO" doc:name="Logger" doc:id="9c95035b-d159-4166-9197-e305c83bb0cf" message="#[payload]"/>
+		<set-variable value='#[output application/json --- read(payload, "application/json")]' doc:name="Claim data retrieved from Kafka Topic" doc:id="db7322cd-a0df-44c7-8ca6-1e110227e741" variableName="claimData"/>
+		<claims-system-api:get-beneficiaries doc:name="Beneficiary Exist?" doc:id="025eff1a-732f-444f-a0a9-c6b4ac93efe8" config-ref="Claims_System_API_Config" desynpuf-id="#[vars.claimData.DESYNPUF_ID]"/>
+		<choice doc:name="Choice" doc:id="ca1f8391-bf36-4ec8-8b2d-b050c98128fe" >
+			<when expression='#[payload=="true"]'>
+				<logger level="INFO" doc:name="Logger" doc:id="3b79e3e4-76d0-4f5c-aed1-01a8d51f0307" message="BENEFICIARY AVAILABLE. PROCEEDING WITH NEXT STEPS OF VALIDATION."/>
+				<ee:transform doc:name="Transform Message" doc:id="d3eea6dd-0fff-475a-8353-809fd825f9e0" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"CLM_STATUS": if (!isEmpty(vars.claimData.CLM_FROM_DT) and !isEmpty(vars.claimData.CLM_THRU_DT)) "SUCCESS" else "CLM_FROM_DT and/or CLM_THRU_DT cannot be empty. FAILED."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="f9de2295-3137-44db-9f30-3c150cd5d28f" message="*********BENEFICIARY NOT AVAILABLE*********"/>
+				<ee:transform doc:name="Transform Message" doc:id="e6e2af1e-056a-4632-bd46-f896259ab05d" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"CLM_STATUS": "Beneficiary Not Available. FAILED."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+		<claims-system-api:update-existing-claim doc:name="Update Claim Status" doc:id="fdf8e7b4-d926-40aa-9f0c-5cd8ce6076e4" config-ref="Claims_System_API_Config" beneficiary-id="#[vars.claimData.DESYNPUF_ID]" claim-id="#[vars.claimData.CLM_ID]" claim-status="#[payload.CLM_STATUS]"/>
+	</flow>
+</mule>
